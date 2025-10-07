@@ -291,40 +291,60 @@ st.caption(f"📦 GitHub data status: **{status}** · rows in CSV: **{nrows}**")
 with tab_map:
     st.subheader("Community Map")
 
-    # Always re-fetch from GitHub when tab renders
-    df = load_entries()
+    # Always fetch fresh from GitHub
+    raw = load_entries()
 
-    if df.empty:
-        st.info("No entries yet. Add one in the **Add City** tab.")
+    # DIAG: show what we actually read
+    st.caption("Raw rows (first 3):")
+    if not raw.empty:
+        st.dataframe(raw.head(3), use_container_width=True, height=180)
     else:
-        df = df.copy()
-        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
-        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-        df = df.dropna(subset=["lat", "lon"])
-        df = df[(df["lat"].between(-90, 90)) & (df["lon"].between(-180, 180))]
+        st.info("No entries yet. Add one in the **Add City** tab.")
+        st.stop()
 
-        if df.empty:
-            st.info("No valid coordinates to show yet.")
+    # Clean
+    df = raw.copy()
+    # if your CSV columns are strings, coerce to numeric
+    df["lat"] = pd.to_numeric(df.get("lat"), errors="coerce")
+    df["lon"] = pd.to_numeric(df.get("lon"), errors="coerce")
+    df = df.dropna(subset=["lat", "lon"])
+    df = df[(df["lat"].between(-90, 90)) & (df["lon"].between(-180, 180))]
+
+    # DIAG: show the cleaned rows we will plot
+    st.caption("Cleaned rows used for map (first 3):")
+    if not df.empty:
+        st.dataframe(df[["username","city","country","lat","lon"]].head(3), use_container_width=True, height=150)
+    else:
+        st.error("Your CSV loaded, but after cleaning there are 0 valid coordinates. "
+                 "Check that columns are named exactly 'lat' and 'lon' and contain numbers.")
+        st.stop()
+
+    # Build map
+    try:
+        m = folium.Map(tiles="OpenStreetMap")  # super-reliable tiles
+        cluster = MarkerCluster().add_to(m)
+
+        pts = []
+        for _, r in df.iterrows():
+            lat, lon = float(r["lat"]), float(r["lon"])
+            popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+            folium.Marker([lat, lon], popup=popup).add_to(cluster)
+            pts.append((lat, lon))
+
+        # fit or center
+        if len(pts) >= 2:
+            m.fit_bounds(pts, padding=(20, 20))
+        elif len(pts) == 1:
+            m.location = [pts[0][0], pts[0][1]]
+            m.zoom_start = 9
         else:
-            m = folium.Map(tiles="CartoDB positron")
-            cluster = MarkerCluster().add_to(m)
-            bounds = []
+            m.location = [20, 0]; m.zoom_start = 2
 
-            for _, r in df.iterrows():
-                lat, lon = float(r["lat"]), float(r["lon"])
-                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                folium.Marker([lat, lon], popup=popup).add_to(cluster)
-                bounds.append((lat, lon))
-
-            if bounds:
-                m.fit_bounds(bounds, padding=(20, 20))
-            else:
-                m.location = [20, 0]; m.zoom_start = 2
-
-            # Different sessions sometimes reuse the widget; seed key on data hash
-            key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
-            try:
-                st_folium(m, height=700, use_container_width=True, key=f"community_map_{key_seed}")
-            except Exception:
-                from streamlit.components.v1 import html
-                html(m.get_root().render(), height=700)
+        key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
+        try:
+            st_folium(m, height=650, use_container_width=True, key=f"community_map_{key_seed}")
+        except Exception:
+            from streamlit.components.v1 import html
+            html(m.get_root().render(), height=650)
+    except Exception as e:
+        st.exception(e)
