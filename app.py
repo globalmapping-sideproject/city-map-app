@@ -269,18 +269,38 @@ with tab_add:
     else:
         st.info("Pick a city above to see a preview map here.")
 
+# ---- DIAG: show what GitHub returns, and force fresh read
+def gh_status():
+    try:
+        content, sha = gh_get_file(GITHUB_REPO, GITHUB_FILE_PATH, GITHUB_BRANCH)
+        if content is None and sha is None:
+            return "missing", 0
+        try:
+            df = pd.read_csv(pd.io.common.BytesIO(content))
+            return "ok", len(df)
+        except Exception as e:
+            return f"csv-parse-error: {e.__class__.__name__}", 0
+    except requests.HTTPError as e:
+        return f"http {e.response.status_code}", 0
+    except Exception as e:
+        return f"error {type(e).__name__}", 0
+
+status, nrows = gh_status()
+st.caption(f"📦 GitHub data status: **{status}** · rows in CSV: **{nrows}**")
+
 with tab_map:
     st.subheader("Community Map")
 
+    # Always re-fetch from GitHub when tab renders
     df = load_entries()
+
     if df.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # hard clean to avoid folium blank renders
         df = df.copy()
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-        df = df.dropna(subset=["lat","lon"])
+        df = df.dropna(subset=["lat", "lon"])
         df = df[(df["lat"].between(-90, 90)) & (df["lon"].between(-180, 180))]
 
         if df.empty:
@@ -288,23 +308,20 @@ with tab_map:
         else:
             m = folium.Map(tiles="CartoDB positron")
             cluster = MarkerCluster().add_to(m)
-
             bounds = []
+
             for _, r in df.iterrows():
-                try:
-                    lat, lon = float(r["lat"]), float(r["lon"])
-                    popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                    folium.Marker([lat, lon], popup=popup).add_to(cluster)
-                    bounds.append((lat, lon))
-                except Exception:
-                    continue
+                lat, lon = float(r["lat"]), float(r["lon"])
+                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                folium.Marker([lat, lon], popup=popup).add_to(cluster)
+                bounds.append((lat, lon))
 
             if bounds:
                 m.fit_bounds(bounds, padding=(20, 20))
             else:
                 m.location = [20, 0]; m.zoom_start = 2
 
-            # Force remount when data changes (prevents blank map after multiple pins)
+            # Different sessions sometimes reuse the widget; seed key on data hash
             key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
             try:
                 st_folium(m, height=700, use_container_width=True, key=f"community_map_{key_seed}")
