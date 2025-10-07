@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+
+# Streamlit & data
+.streamlit/secrets.toml
+.env
+.data/
+data/*.csv
+
+
+# OS
+.DS_Store
+Thumbs.db
