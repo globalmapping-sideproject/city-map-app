@@ -3,3 +3,4 @@ id,username,city,country,lat,lon,continent,un_region,created_at
 591bd767-0f7d-4acb-80a9-c6a3e33acc76,Matador1550,"New York, NY, United States of America",United States,40.7127281,-74.0060152,,,2025-10-07T21:26:29.528229
 2996de1c-9718-4c84-ab97-aeb89e4d9483,Chops,"Maastricht, LI, Netherlands",Netherlands,50.8512438,5.6909768,,,2025-10-07T21:37:03.094606
 97b19e98-5cfc-45e5-b62e-4b0354151b7f,Bunchasammiches,"Chicago, IL, United States of America",United States,41.8755616,-87.6244212,,,2025-10-07T21:51:27.028269
+312754ff-cfa0-4fa5-a469-99c17c86d56d,Bud,"Chicago, IL, United States of America",United States,41.8755616,-87.6244212,,,2025-10-07T22:12:31.047069
