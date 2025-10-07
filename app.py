@@ -321,14 +321,33 @@ with tab_map:
                 folium.Marker([lat, lon], popup=popup).add_to(cluster)
                 bounds.append((lat, lon))
 
-            # Fit / center
-            if len(bounds) >= 2:
-                m.fit_bounds(bounds, padding=(20, 20))
-            elif len(bounds) == 1:
-                m.location = [bounds[0][0], bounds[0][1]]
-                m.zoom_start = 10
+            # --- Smart zoom / center ---
+            lats = [p[0] for p in bounds]
+            lons = [p[1] for p in bounds]
+            
+            if len(bounds) == 1:
+                # One pin → zoom in close
+                m.location = [lats[0], lons[0]]
+                m.zoom_start = 12
             else:
-                m.location = [20, 0]; m.zoom_start = 2
+                # More than one pin → if pins are close, zoom in; if far apart, fit bounds
+                lat_span = max(lats) - min(lats)
+                lon_span = max(lons) - min(lons)
+                max_span = max(lat_span, lon_span)
+            
+                if max_span < 1.5:        # ~city scale
+                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
+                    m.zoom_start = 11
+                elif max_span < 5:         # ~metro/region scale
+                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
+                    m.zoom_start = 9
+                elif max_span < 15:        # ~state/country scale
+                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
+                    m.zoom_start = 6
+                else:
+                    # pins spread across the world → show everything
+                    m.fit_bounds(bounds, padding=(30, 30))
+
 
             # Render as raw HTML (bypasses streamlit-folium widget issues)
             html(m.get_root().render(), height=650, scrolling=False)
