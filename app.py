@@ -290,10 +290,15 @@ st.caption(f"📦 GitHub data status: **{status}** · rows in CSV: **{nrows}**")
 
 from streamlit.components.v1 import html  # put near your other imports (top of file)
 
-# ...
-
 with tab_map:
     st.subheader("Community Map")
+
+    # Tunables — tweak these to your taste
+    CITY_ZOOM     = 12   # one pin (city-level)
+    REGION_ZOOM   = 10   # pins within ~1–2 degrees
+    COUNTRY_ZOOM  = 7    # pins within ~3–10 degrees
+    WORLD_ZOOM    = 3    # fallback world view
+    MAP_HEIGHT    = 720  # taller map
 
     df = load_entries()
 
@@ -310,44 +315,45 @@ with tab_map:
         if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # Build Folium map (reliable tiles)
-            m = folium.Map(tiles="CartoDB positron")
+            # Collect points
+            pts = [(float(r["lat"]), float(r["lon"])) for _, r in df.iterrows()]
+
+            # Choose a stable center/zoom (no fit_bounds "bounce")
+            if len(pts) == 1:
+                center = [pts[0][0], pts[0][1]]
+                zoom = CITY_ZOOM
+            else:
+                lats = [p[0] for p in pts]
+                lons = [p[1] for p in pts]
+                center = [sum(lats)/len(lats), sum(lons)/len(lons)]
+                span_lat = max(lats) - min(lats)
+                span_lon = max(lons) - min(lons)
+                max_span = max(span_lat, span_lon)
+
+                # Closer cluster → higher zoom; globally spread → lower zoom
+                if max_span < 1.5:        # ~ city scale
+                    zoom = REGION_ZOOM
+                elif max_span < 5:         # ~ metro/region scale
+                    zoom = COUNTRY_ZOOM
+                elif max_span < 15:        # ~ country scale
+                    zoom = 6
+                else:
+                    zoom = WORLD_ZOOM
+
+            # Build map (full width, taller, with clustering)
+            m = folium.Map(
+                location=center,
+                zoom_start=zoom,
+                tiles="CartoDB positron",
+                max_zoom=18,
+                min_zoom=2,
+            )
             cluster = MarkerCluster().add_to(m)
 
-            bounds = []
             for _, r in df.iterrows():
                 lat, lon = float(r["lat"]), float(r["lon"])
                 popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
                 folium.Marker([lat, lon], popup=popup).add_to(cluster)
-                bounds.append((lat, lon))
 
-            # --- Smart zoom / center ---
-            lats = [p[0] for p in bounds]
-            lons = [p[1] for p in bounds]
-            
-            if len(bounds) == 1:
-                # One pin → zoom in close
-                m.location = [lats[0], lons[0]]
-                m.zoom_start = 12
-            else:
-                # More than one pin → if pins are close, zoom in; if far apart, fit bounds
-                lat_span = max(lats) - min(lats)
-                lon_span = max(lons) - min(lons)
-                max_span = max(lat_span, lon_span)
-            
-                if max_span < 1.5:        # ~city scale
-                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
-                    m.zoom_start = 11
-                elif max_span < 5:         # ~metro/region scale
-                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
-                    m.zoom_start = 9
-                elif max_span < 15:        # ~state/country scale
-                    m.location = [sum(lats)/len(lats), sum(lons)/len(lons)]
-                    m.zoom_start = 6
-                else:
-                    # pins spread across the world → show everything
-                    m.fit_bounds(bounds, padding=(30, 30))
-
-
-            # Render as raw HTML (bypasses streamlit-folium widget issues)
-            html(m.get_root().render(), height=650, scrolling=False)
+            # Render as pure HTML (most reliable), tall and full-width
+            html(m.get_root().render(), height=MAP_HEIGHT, scrolling=False)
