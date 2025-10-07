@@ -345,7 +345,7 @@ with tab_map:
                 location=center,
                 zoom_start=zoom,
                 tiles="CartoDB positron",
-                max_zoom=18,
+                max_zoom=14,
                 min_zoom=2,
             )
             cluster = MarkerCluster().add_to(m)
