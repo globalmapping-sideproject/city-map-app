@@ -112,11 +112,13 @@ def nominatim_candidates(query: str, limit: int = 10) -> pd.DataFrame:
 st.title(APP_TITLE)
 st.write("### 🌍 Add your city and see where others are from!")
 
-# Session state for candidates so we can update options live
+# Session state
 if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 if "options_df" not in st.session_state:
     st.session_state.options_df = pd.DataFrame()
+if "selected_loc" not in st.session_state:
+    st.session_state.selected_loc = None  # store last selection for preview
 
 tab_add, tab_map = st.tabs(["📍 Add City", "🗺️ Map"])
 
@@ -127,13 +129,14 @@ with tab_add:
     username = st.text_input("Username", "")
 
     # ---------- Single type-ahead control ----------
-    # We show one text box; as the user types we fetch candidates and render a single
-    # selectbox WITHOUT its label so visually it acts as one narrowing control.
-    st.caption("Start typing and pick a result from the dropdown (Geoapify Autocomplete).")
+    caption_text = "Type to search for cities (powered by Geoapify Autocomplete)." if GEOAPIFY_KEY \
+        else "Free OSM search: type a city then pick from dropdown."
+    st.caption(caption_text)
 
+    # One text input (label hidden) + one dropdown (label hidden)
     typed = st.text_input(" ", "", placeholder="e.g., New York City, Tokyo, Belgrade", label_visibility="collapsed")
 
-    # Fetch candidates (Geoapify preferred)
+    # Fetch candidates
     new_df = pd.DataFrame()
     if len(typed.strip()) >= 2:
         if GEOAPIFY_KEY:
@@ -141,14 +144,13 @@ with tab_add:
         else:
             new_df = nominatim_candidates(typed, limit=12)
 
-    # If the query changed, update options
+    # Update options only when query changes
     if typed != st.session_state.last_query:
         st.session_state.options_df = new_df
         st.session_state.last_query = typed
 
-    # One dropdown, label hidden — feels like a single control
-    selected = None
     df_opts = st.session_state.options_df
+    selected = None
     if not df_opts.empty:
         choice = st.selectbox(" ", df_opts["display_name"], index=None,
                               placeholder="Select a city from results", label_visibility="collapsed")
@@ -160,8 +162,11 @@ with tab_add:
                 "lat": float(sel["lat"]),
                 "lon": float(sel["lon"]),
             }
+    else:
+        if len(typed.strip()) >= 2:
+            st.error("No matches. Try another spelling. Examples: **Recoil Ridge**, **Port City**, **Marin**.")
 
-    # Add button (only enabled when username + selection present)
+    # Add button (enabled when username + selection present)
     can_add = bool(username.strip()) and (selected is not None)
     if st.button("➕ Add this location", disabled=not can_add):
         continent, region = country_to_region(selected["country"])
@@ -177,31 +182,30 @@ with tab_add:
             created_at=datetime.utcnow().isoformat(),
         )
         save_entry(row)
+        st.session_state.selected_loc = selected  # show preview below
         st.success("Added!")
 
-    # ---- Big map with pins right on this tab ----
-    entries = load_entries()
+    # ---- Preview map of YOUR selected location only ----
     st.write("---")
-    st.write("### 🗺️ Community Map")
-    if entries.empty:
-        st.info("No entries yet.")
+    st.write("#### 📍 Your selected location (preview)")
+    preview = st.session_state.selected_loc
+    if preview:
+        mprev = folium.Map(location=[preview["lat"], preview["lon"]], zoom_start=6, tiles="CartoDB positron")
+        folium.Marker([preview["lat"], preview["lon"]], popup=preview["city"]).add_to(mprev)
+        st_folium(mprev, height=400, width=900, key="preview_map")
     else:
-        m = folium.Map(location=[20, 0], zoom_start=2, tiles="CartoDB positron")
-        cluster = MarkerCluster().add_to(m)
-        for _, r in entries.iterrows():
-            popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-            folium.Marker([r["lat"], r["lon"]], popup=popup).add_to(cluster)
-        st_folium(m, height=600, width=1000)
+        st.info("Pick a city above to see a preview map here.")
 
 with tab_map:
     st.subheader("Community Map")
-    entries2 = load_entries()
-    if entries2.empty:
+    entries = load_entries()
+    if entries.empty:
         st.info("No entries yet.")
     else:
         m2 = folium.Map(location=[20, 0], zoom_start=2, tiles="CartoDB positron")
         cluster2 = MarkerCluster().add_to(m2)
-        for _, r in entries2.iterrows():
+        for _, r in entries.iterrows():
             popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
             folium.Marker([r["lat"], r["lon"]], popup=popup).add_to(cluster2)
-        st_folium(m2, height=700, width=1200)
+        # Give this a unique key so Streamlit doesn't think it's the same widget
+        st_folium(m2, height=700, width=1200, key="community_map")
