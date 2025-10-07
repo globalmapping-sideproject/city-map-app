@@ -27,9 +27,11 @@ if not os.path.exists(CSV_PATH):
     ]).to_csv(CSV_PATH, index=False)
 
 # ---------- helpers ----------
-geolocator = Nominatim(user_agent="city-map-app/1.0 (contact: youremail@example.com)")
+UA = st.secrets.get("GEOPY_USER_AGENT", "city-map-app/1.0 (contact: globalmapping958@gmail.com)")
+geolocator = Nominatim(user_agent=UA, timeout=10)
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 reverse = RateLimiter(geolocator.reverse, min_delay_seconds=1)
+
 cc = coco.CountryConverter()
 
 def load_entries():
@@ -62,31 +64,85 @@ st.write("### 🌍 Add your city and see where others are from!")
 tab1, tab2 = st.tabs(["📍 Add City", "🗺️ Map"])
 
 with tab1:
+    st.subheader("Add yourself to the map")
+
+    # hold results across clicks
+    if "candidates_df" not in st.session_state:
+        st.session_state["candidates_df"] = None
+
     name = st.text_input("Your name (optional)", "")
-    city = st.text_input("Enter a city (e.g. Paris, Tokyo)", "")
-    if st.button("Add City"):
-        if not city:
-            st.warning("Please type a city name.")
-        else:
-            loc = geocode(city)
-            if loc:
-                country = loc.raw.get("address", {}).get("country", "")
-                continent, region = country_to_region(country)
-                row = dict(
-                    id=str(uuid.uuid4()),
-                    username=name or "Anonymous",
-                    city=city,
-                    country=country,
-                    lat=loc.latitude,
-                    lon=loc.longitude,
-                    continent=continent,
-                    un_region=region,
-                    created_at=datetime.utcnow().isoformat(),
-                )
-                save_entry(row)
-                st.success(f"✅ Added {city}, {country}")
-            else:
-                st.error("City not found!")
+    query = st.text_input("Enter a city (e.g., Paris, Tokyo)", "")
+
+    colA, colB = st.columns([1, 1])
+    with colA:
+        search = st.button("🔎 Search city")
+    with colB:
+        clear = st.button("Clear")
+
+    if clear:
+        st.session_state["candidates_df"] = None
+        st.experimental_rerun()
+
+    # run search
+    if search and query.strip():
+        try:
+            candidates = geocode(
+                query.strip(),
+                exactly_one=False,
+                addressdetails=True,
+                limit=8,
+            )
+            time.sleep(1)  # be polite to OSM
+            results = []
+            if candidates:
+                for loc in candidates:
+                    addr = (loc.raw.get("address", {}) or {})
+                    results.append({
+                        "display_name": loc.address,
+                        "lat": float(loc.latitude),
+                        "lon": float(loc.longitude),
+                        "country": addr.get("country", ""),
+                    })
+            st.session_state["candidates_df"] = pd.DataFrame(results) if results else None
+        except Exception as e:
+            st.session_state["candidates_df"] = None
+            st.warning("Search failed or rate-limited. Try again in a moment.")
+
+    # selection UI
+    df = st.session_state["candidates_df"]
+    lat = lon = None
+    country = ""
+    picked_city_text = ""
+
+    if df is not None and not df.empty:
+        choice = st.selectbox("Select a matching location:", df["display_name"])
+        sel = df.loc[df["display_name"] == choice].iloc[0]
+        lat, lon = sel["lat"], sel["lon"]
+        country = sel["country"]
+        picked_city_text = choice
+        st.success(f"✅ Selected: {choice}")
+    elif search:
+        st.error("No matches. Try a broader or different spelling (e.g., 'New York, USA').")
+
+    # store selection
+    if lat is not None and lon is not None:
+        if st.button("➕ Add this location"):
+            continent, region = country_to_region(country)
+            row = dict(
+                id=str(uuid.uuid4()),
+                username=name or "Anonymous",
+                city=picked_city_text or query.strip(),
+                country=country,
+                lat=lat,
+                lon=lon,
+                continent=continent,
+                un_region=region,
+                created_at=datetime.utcnow().isoformat(),
+            )
+            save_entry(row)
+            st.session_state["candidates_df"] = None
+            st.success("Added! Go to the Map tab to see your pin.")
+
 
 with tab2:
     df = load_entries()
