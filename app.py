@@ -291,7 +291,6 @@ st.caption(f"📦 GitHub data status: **{status}** · rows in CSV: **{nrows}**")
 with tab_map:
     st.subheader("Community Map")
 
-    # Always fetch fresh from GitHub
     df = load_entries()
 
     if df.empty:
@@ -307,31 +306,37 @@ with tab_map:
         if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # Build map (use a very reliable tile source)
-            m = folium.Map(tiles="CartoDB positron")
-            cluster = MarkerCluster().add_to(m)
+            # 1) build the map with a very reliable tile source
+            m = folium.Map(tiles="OpenStreetMap")
 
-            bounds = []
+            # Add markers (without cluster first to rule out plugin issues)
+            points = []
             for _, r in df.iterrows():
                 lat, lon = float(r["lat"]), float(r["lon"])
-                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                folium.Marker([lat, lon], popup=popup).add_to(cluster)
-                bounds.append((lat, lon))
+                folium.Marker(
+                    [lat, lon],
+                    popup=f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                ).add_to(m)
+                points.append((lat, lon))
 
-            # Fit to markers (or center if just 1)
-            if len(bounds) >= 2:
-                m.fit_bounds(bounds, padding=(20, 20))
-            elif len(bounds) == 1:
-                m.location = [bounds[0][0], bounds[0][1]]
-                m.zoom_start = 9
+            # 2) center / fit
+            if len(points) >= 2:
+                m.fit_bounds(points, padding=(20, 20))
+            elif len(points) == 1:
+                m.location = [points[0][0], points[0][1]]
+                m.zoom_start = 10
             else:
                 m.location = [20, 0]; m.zoom_start = 2
 
-            # Force remount in every session based on data
-            key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
+            # 3) robust rendering: st_folium -> raw HTML fallback
+            key_seed = f"{len(df)}-{round(df['lat'].sum(),6)}-{round(df['lon'].sum(),6)}"
+            rendered = False
             try:
-                st_folium(m, height=650, use_container_width=True, key=f"community_map_{key_seed}")
+                _ret = st_folium(m, height=650, use_container_width=True, key=f"community_map_{key_seed}")
+                rendered = True
             except Exception:
-                # Fallback in case st_folium misbehaves
+                rendered = False
+
+            if not rendered:
                 from streamlit.components.v1 import html
-                html(m.get_root().render(), height=650)
+                html(m.get_root().render(), height=650, scrolling=False)
