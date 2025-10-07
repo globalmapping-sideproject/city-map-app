@@ -200,27 +200,38 @@ with tab_map:
     st.subheader("Community Map")
 
     entries = load_entries()
-    st.caption(f"Rows loaded: **{len(entries)}**")  # tiny sanity check
+    st.caption(f"Rows loaded: **{len(entries)}**")
 
     if entries.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # guard against any bad coords
-        entries = entries.dropna(subset=["lat","lon"])
-        if "lat" in entries and "lon" in entries:
-            entries = entries[(entries["lat"].between(-90,90)) & (entries["lon"].between(-180,180))]
+        # Clean & preview a few rows for sanity
+        entries = entries.dropna(subset=["lat", "lon"])
+        entries = entries[(entries["lat"].between(-90, 90)) & (entries["lon"].between(-180, 180))]
+        st.caption("First rows:")
+        st.dataframe(entries[["username","city","country","lat","lon"]].head(3), use_container_width=True)
 
         if entries.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            m = folium.Map(location=[20, 0], zoom_start=2, tiles="CartoDB positron")
+            # Build map
+            m = folium.Map(tiles="OpenStreetMap")  # very reliable tiles
             cluster = MarkerCluster().add_to(m)
+
+            lats_lons = []
             for _, r in entries.iterrows():
-                try:
-                    lat = float(r["lat"]); lon = float(r["lon"])
-                    if not (math.isnan(lat) or math.isnan(lon)):
-                        popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                        folium.Marker([lat, lon], popup=popup).add_to(cluster)
-                except Exception:
-                    continue
-            st_folium(m, height=700, width=1200, key="community_map")
+                lat = float(r["lat"]); lon = float(r["lon"])
+                lats_lons.append((lat, lon))
+                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                folium.Marker([lat, lon], popup=popup).add_to(cluster)
+
+            # Fit map to markers
+            if lats_lons:
+                m.fit_bounds(lats_lons, padding=(20, 20))
+
+            # Render with a safe key; fallback to raw HTML if needed
+            try:
+                st_folium(m, height=700, use_container_width=True, key="community_map")
+            except Exception:
+                from streamlit.components.v1 import html
+                html(m.get_root().render(), height=700)
