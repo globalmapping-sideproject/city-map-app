@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+import base64
 from datetime import datetime
 import requests
 import pandas as pd
@@ -13,56 +14,131 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.location import Location
-import math
 
 # -------------------- Page config --------------------
 st.set_page_config(page_title="RCWG Map", layout="wide")
 APP_TITLE = "RCWG Map"
-DATA_DIR = "data"
-CSV_PATH = os.path.join(DATA_DIR, "entries.csv")
 
-os.makedirs(DATA_DIR, exist_ok=True)
-if not os.path.exists(CSV_PATH):
-    pd.DataFrame(
-        columns=["id","username","city","country","lat","lon","continent","un_region","created_at"]
-    ).to_csv(CSV_PATH, index=False)
-
-# -------------------- Secrets --------------------
-UA = st.secrets.get("GEOPY_USER_AGENT", "rcwg-map/1.0 (contact: your@email)")
+# -------------------- Secrets / config --------------------
+UA = st.secrets.get("GEOPY_USER_AGENT", "rcwg-map/1.0 (contact: you@example.com)")
 GEOAPIFY_KEY = st.secrets.get("GEOAPIFY_API_KEY", None)
+
+# GitHub sync settings
+GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
+GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")          # e.g. "globalmapping-sideproject/city-map-app"
+GITHUB_BRANCH = st.secrets.get("GITHUB_BRANCH", "main")
+GITHUB_FILE_PATH = st.secrets.get("GITHUB_FILE_PATH", "data/entries.csv")
+
+CSV_COLUMNS = ["id","username","city","country","lat","lon","continent","un_region","created_at"]
 
 # -------------------- Geocoders --------------------
 _geolocator = Nominatim(user_agent=UA, timeout=10)
 _geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=1)
 _reverse = RateLimiter(_geolocator.reverse, min_delay_seconds=1)
 
-# -------------------- Data helpers --------------------
-def load_entries() -> pd.DataFrame:
-    """Always read fresh so the Map tab shows new pins immediately."""
-    try:
-        df = pd.read_csv(CSV_PATH)
-    except Exception:
-        return pd.DataFrame(columns=["id","username","city","country","lat","lon","continent","un_region","created_at"])
+# -------------------- GitHub helpers --------------------
+def _gh_headers():
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
 
-    # dtypes and cleaning
-    if "lat" in df: df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
-    if "lon" in df: df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-    for c in ["username","city","country"]:
-        if c in df: df[c] = df[c].fillna("")
-    # keep only valid coordinates
+def gh_get_file(owner_repo: str, path: str, branch: str):
+    """Return (bytes_content, sha) or (None, None) if not found."""
+    if not GITHUB_TOKEN or not owner_repo:
+        return None, None
+    url = f"https://api.github.com/repos/{owner_repo}/contents/{path}"
+    params = {"ref": branch}
+    r = requests.get(url, headers=_gh_headers(), params=params, timeout=12)
+    if r.status_code == 404:
+        return None, None
+    r.raise_for_status()
+    data = r.json()
+    content_b64 = data.get("content", "")
+    sha = data.get("sha")
+    if content_b64:
+        raw = base64.b64decode(content_b64.encode("utf-8"))
+        return raw, sha
+    return None, sha
+
+def gh_put_file(owner_repo: str, path: str, branch: str, content_bytes: bytes, sha: str | None, message: str):
+    """Create or update file. If sha is None → create; else update."""
+    if not GITHUB_TOKEN or not owner_repo:
+        raise RuntimeError("Missing GitHub token/repo in secrets.")
+    url = f"https://api.github.com/repos/{owner_repo}/contents/{path}"
+    body = {
+        "message": message,
+        "content": base64.b64encode(content_bytes).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha:
+        body["sha"] = sha
+    r = requests.put(url, headers=_gh_headers(), json=body, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def ensure_csv_exists():
+    """Create CSV in repo if missing."""
+    content, sha = gh_get_file(GITHUB_REPO, GITHUB_FILE_PATH, GITHUB_BRANCH)
+    if content is None:
+        df = pd.DataFrame(columns=CSV_COLUMNS)
+        gh_put_file(
+            GITHUB_REPO,
+            GITHUB_FILE_PATH,
+            GITHUB_BRANCH,
+            df.to_csv(index=False).encode("utf-8"),
+            sha=None,
+            message="chore: initialize entries.csv"
+        )
+
+# -------------------- Data helpers (GitHub-synced) --------------------
+def load_entries() -> pd.DataFrame:
+    """Always read fresh from GitHub so Map tab shows new pins immediately."""
+    try:
+        ensure_csv_exists()
+        content, _sha = gh_get_file(GITHUB_REPO, GITHUB_FILE_PATH, GITHUB_BRANCH)
+        if content is None:
+            return pd.DataFrame(columns=CSV_COLUMNS)
+        df = pd.read_csv(pd.io.common.BytesIO(content))
+    except Exception:
+        return pd.DataFrame(columns=CSV_COLUMNS)
+
+    # Clean
+    for col in ["lat", "lon"]:
+        if col in df:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    for c in ["username", "city", "country"]:
+        if c in df:
+            df[c] = df[c].fillna("")
+    # keep only valid coordinates (prevents Folium glitches)
     if "lat" in df and "lon" in df:
         df = df.dropna(subset=["lat","lon"])
         df = df[(df["lat"].between(-90,90)) & (df["lon"].between(-180,180))]
     return df
 
 def save_entry(row: dict) -> None:
-    # append and persist
-    df = load_entries()
+    """Append a row and push to GitHub with a commit."""
+    ensure_csv_exists()
+    content, sha = gh_get_file(GITHUB_REPO, GITHUB_FILE_PATH, GITHUB_BRANCH)
+    if content is None:
+        df = pd.DataFrame(columns=CSV_COLUMNS)
+    else:
+        df = pd.read_csv(pd.io.common.BytesIO(content))
+
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    df.to_csv(CSV_PATH, index=False)
+    out_bytes = df.to_csv(index=False).encode("utf-8")
+    gh_put_file(
+        GITHUB_REPO,
+        GITHUB_FILE_PATH,
+        GITHUB_BRANCH,
+        out_bytes,
+        sha=sha,  # include sha so it's an update, not a new file
+        message=f"feat: add entry for {row.get('username','unknown')} @ {row.get('city','')}"
+    )
 
 def country_to_region(_country: str):
-    # simple placeholder; wire a full mapping later if you want stats
+    # simple placeholder for future stats
     return "", ""
 
 # -------------------- Geocoding helpers --------------------
@@ -120,18 +196,16 @@ if "options_df" not in st.session_state:
     st.session_state.options_df = pd.DataFrame()
 if "selected_loc" not in st.session_state:
     st.session_state.selected_loc = None
-if "just_added" not in st.session_state:
-    st.session_state.just_added = False
 
 tab_add, tab_map = st.tabs(["📍 Add City", "🗺️ Map"])
 
 with tab_add:
     st.subheader("Add yourself to the map")
 
-    # Username (no 'required' text)
+    # Username
     username = st.text_input("Username", "")
 
-    # ---- City control (single label) ----
+    # ---- City control (single label + dropdown right under it) ----
     typed = st.text_input("City", "", placeholder="Start typing…")
 
     # fetch suggestions while typing
@@ -147,10 +221,8 @@ with tab_add:
         st.session_state.last_query = typed
 
     df_opts = st.session_state.options_df
-
     selected = None
     if not df_opts.empty:
-        # hide label to make it feel like the same control
         choice = st.selectbox(" ", df_opts["display_name"], index=None,
                               placeholder="Select a match…", label_visibility="collapsed")
         if choice:
@@ -168,7 +240,6 @@ with tab_add:
     # Add button
     can_add = bool(username.strip()) and (selected is not None)
     if st.button("➕ Add this location", disabled=not can_add):
-        continent, region = country_to_region(selected["country"])
         row = dict(
             id=str(uuid.uuid4()),
             username=username.strip(),
@@ -176,14 +247,16 @@ with tab_add:
             country=selected["country"],
             lat=selected["lat"],
             lon=selected["lon"],
-            continent=continent,
-            un_region=region,
+            continent="",
+            un_region="",
             created_at=datetime.utcnow().isoformat(),
         )
-        save_entry(row)
-        st.session_state.selected_loc = selected
-        st.session_state.just_added = True
-        st.success("Added! Check the Map tab for the community view.")
+        try:
+            save_entry(row)
+            st.session_state.selected_loc = selected
+            st.success("Added! Check the Map tab for the community view.")
+        except Exception as e:
+            st.error(f"Saving to GitHub failed: {e}")
 
     # ---- Preview map of just YOUR pick ----
     st.write("---")
@@ -200,21 +273,20 @@ with tab_map:
     st.subheader("Community Map")
 
     df = load_entries()
-
     if df.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # Clean numeric coords and remove invalids
+        # hard clean to avoid folium blank renders
         df = df.copy()
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-        df = df.dropna(subset=["lat", "lon"])
+        df = df.dropna(subset=["lat","lon"])
         df = df[(df["lat"].between(-90, 90)) & (df["lon"].between(-180, 180))]
 
         if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            m = folium.Map(tiles="CartoDB positron")  # stable tiles
+            m = folium.Map(tiles="CartoDB positron")
             cluster = MarkerCluster().add_to(m)
 
             bounds = []
@@ -232,7 +304,7 @@ with tab_map:
             else:
                 m.location = [20, 0]; m.zoom_start = 2
 
-            # Force remount when data changes
+            # Force remount when data changes (prevents blank map after multiple pins)
             key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
             try:
                 st_folium(m, height=700, use_container_width=True, key=f"community_map_{key_seed}")
