@@ -1,0 +1,6 @@
+streamlit==1.36.0
+pandas==2.2.2
+geopy==2.4.1
+folium==0.15.1
+streamlit-folium==0.20.0
+country_converter==1.2
