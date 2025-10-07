@@ -10,7 +10,7 @@ import streamlit as st
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-
+from streamlit.components.v1 import html
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.location import Location
@@ -288,6 +288,10 @@ def gh_status():
 status, nrows = gh_status()
 st.caption(f"📦 GitHub data status: **{status}** · rows in CSV: **{nrows}**")
 
+from streamlit.components.v1 import html  # put near your other imports (top of file)
+
+# ...
+
 with tab_map:
     st.subheader("Community Map")
 
@@ -306,37 +310,25 @@ with tab_map:
         if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # 1) build the map with a very reliable tile source
-            m = folium.Map(tiles="OpenStreetMap")
+            # Build Folium map (reliable tiles)
+            m = folium.Map(tiles="CartoDB positron")
+            cluster = MarkerCluster().add_to(m)
 
-            # Add markers (without cluster first to rule out plugin issues)
-            points = []
+            bounds = []
             for _, r in df.iterrows():
                 lat, lon = float(r["lat"]), float(r["lon"])
-                folium.Marker(
-                    [lat, lon],
-                    popup=f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                ).add_to(m)
-                points.append((lat, lon))
+                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                folium.Marker([lat, lon], popup=popup).add_to(cluster)
+                bounds.append((lat, lon))
 
-            # 2) center / fit
-            if len(points) >= 2:
-                m.fit_bounds(points, padding=(20, 20))
-            elif len(points) == 1:
-                m.location = [points[0][0], points[0][1]]
+            # Fit / center
+            if len(bounds) >= 2:
+                m.fit_bounds(bounds, padding=(20, 20))
+            elif len(bounds) == 1:
+                m.location = [bounds[0][0], bounds[0][1]]
                 m.zoom_start = 10
             else:
                 m.location = [20, 0]; m.zoom_start = 2
 
-            # 3) robust rendering: st_folium -> raw HTML fallback
-            key_seed = f"{len(df)}-{round(df['lat'].sum(),6)}-{round(df['lon'].sum(),6)}"
-            rendered = False
-            try:
-                _ret = st_folium(m, height=650, use_container_width=True, key=f"community_map_{key_seed}")
-                rendered = True
-            except Exception:
-                rendered = False
-
-            if not rendered:
-                from streamlit.components.v1 import html
-                html(m.get_root().render(), height=650, scrolling=False)
+            # Render as raw HTML (bypasses streamlit-folium widget issues)
+            html(m.get_root().render(), height=650, scrolling=False)
