@@ -204,7 +204,7 @@ with tab_map:
     if df.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # --- Clean hard: numeric, drop NaNs / out-of-range
+        # Clean numeric coords and remove invalids
         df = df.copy()
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
@@ -214,15 +214,13 @@ with tab_map:
         if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # --- Build map
-            m = folium.Map(tiles="CartoDB positron")
+            m = folium.Map(tiles="CartoDB positron")  # stable tiles
             cluster = MarkerCluster().add_to(m)
 
             bounds = []
             for _, r in df.iterrows():
                 try:
-                    lat = float(r["lat"])
-                    lon = float(r["lon"])
+                    lat, lon = float(r["lat"]), float(r["lon"])
                     popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
                     folium.Marker([lat, lon], popup=popup).add_to(cluster)
                     bounds.append((lat, lon))
@@ -232,11 +230,9 @@ with tab_map:
             if bounds:
                 m.fit_bounds(bounds, padding=(20, 20))
             else:
-                # Fallback center
-                m.location = [20, 0]
-                m.zoom_start = 2
+                m.location = [20, 0]; m.zoom_start = 2
 
-            # --- Render: force a fresh widget key + robust fallback
+            # Force remount when data changes
             key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
             try:
                 st_folium(m, height=700, use_container_width=True, key=f"community_map_{key_seed}")
