@@ -1,8 +1,0 @@
-streamlit>=1.36
-pandas>=2.0
-geopy>=2.4
-folium>=0.15
-streamlit-folium>=0.20
-country_converter>=1.2
-supabase>=2.6 # optional; only if you want cloud DB
-streamlit-autorefresh>=0.0.1 # tiny helper for auto-refresh
