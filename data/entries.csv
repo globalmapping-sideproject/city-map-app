@@ -1,4 +1,3 @@
 id,username,city,country,lat,lon,continent,un_region,created_at
 5d7f0a7d-998c-41b3-922d-c48bf7d1ea16,Matador1550,"New York, NY, United States of America",United States,40.7127281,-74.0060152,,,2025-10-07T20:29:14.163234
-997d5353-338c-4168-8879-fbd9f0a05e67,Test2,"New York, NY, United States of America",United States,40.7127281,-74.0060152,,,2025-10-07T20:54:21.723616
-dd8033f0-b5d9-4ba3-8e9c-98921e14c26c,Test3,"Bangkok, Thailand",Thailand,13.7524938,100.4935089,,,2025-10-07T20:54:38.435100
+
