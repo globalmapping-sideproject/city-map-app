@@ -13,6 +13,7 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.location import Location
+import math
 
 # -------------------- Page config --------------------
 st.set_page_config(page_title="RCWG Map", layout="wide")
@@ -40,16 +41,22 @@ def load_entries() -> pd.DataFrame:
     """Always read fresh so the Map tab shows new pins immediately."""
     try:
         df = pd.read_csv(CSV_PATH)
-        for col in ["lat","lon"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        for c in ["username","city","country"]:
-            if c in df:
-                df[c] = df[c].fillna("")
-        return df
     except Exception:
         return pd.DataFrame(columns=["id","username","city","country","lat","lon","continent","un_region","created_at"])
 
+    # dtypes and cleaning
+    if "lat" in df: df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    if "lon" in df: df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    for c in ["username","city","country"]:
+        if c in df: df[c] = df[c].fillna("")
+    # keep only valid coordinates
+    if "lat" in df and "lon" in df:
+        df = df.dropna(subset=["lat","lon"])
+        df = df[(df["lat"].between(-90,90)) & (df["lon"].between(-180,180))]
+    return df
+
 def save_entry(row: dict) -> None:
+    # append and persist
     df = load_entries()
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.to_csv(CSV_PATH, index=False)
@@ -106,27 +113,28 @@ def nominatim_candidates(query: str, limit: int = 10) -> pd.DataFrame:
 st.title(APP_TITLE)
 st.write("### 🌍 Add your city and see where others are from!")
 
-# Session state to make the picker feel like a single control
+# Session state to keep the picker tight
 if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 if "options_df" not in st.session_state:
     st.session_state.options_df = pd.DataFrame()
 if "selected_loc" not in st.session_state:
     st.session_state.selected_loc = None
+if "just_added" not in st.session_state:
+    st.session_state.just_added = False
 
 tab_add, tab_map = st.tabs(["📍 Add City", "🗺️ Map"])
 
 with tab_add:
     st.subheader("Add yourself to the map")
 
-    # Username
+    # Username (no 'required' text)
     username = st.text_input("Username", "")
 
-    # ---- Single-looking control: text field + no-label selectbox right under it ----
-    # 1) Text input (label hidden), used to fetch suggestions
-    typed = st.text_input("City", "", placeholder="Start typing…", label_visibility="visible")
+    # ---- City control (single label) ----
+    typed = st.text_input("City", "", placeholder="Start typing…")
 
-    # 2) Fetch suggestions when typing
+    # fetch suggestions while typing
     new_df = pd.DataFrame()
     if len(typed.strip()) >= 2:
         if GEOAPIFY_KEY:
@@ -134,16 +142,15 @@ with tab_add:
         else:
             new_df = nominatim_candidates(typed, limit=12)
 
-    # Update options only when query changes (reduces flicker)
     if typed != st.session_state.last_query:
         st.session_state.options_df = new_df
         st.session_state.last_query = typed
 
     df_opts = st.session_state.options_df
 
-    # 3) Drop-down directly below (label hidden) -> visually feels like one control
     selected = None
     if not df_opts.empty:
+        # hide label to make it feel like the same control
         choice = st.selectbox(" ", df_opts["display_name"], index=None,
                               placeholder="Select a match…", label_visibility="collapsed")
         if choice:
@@ -158,7 +165,7 @@ with tab_add:
         if len(typed.strip()) >= 2:
             st.error("No matches. Try another spelling. Examples: **Recoil Ridge**, **Port City**, **Marin**.")
 
-    # Add button (enabled when username + selection present)
+    # Add button
     can_add = bool(username.strip()) and (selected is not None)
     if st.button("➕ Add this location", disabled=not can_add):
         continent, region = country_to_region(selected["country"])
@@ -175,7 +182,8 @@ with tab_add:
         )
         save_entry(row)
         st.session_state.selected_loc = selected
-        st.success("Added!")
+        st.session_state.just_added = True
+        st.success("Added! Check the Map tab for the community view.")
 
     # ---- Preview map of just YOUR pick ----
     st.write("---")
@@ -190,14 +198,29 @@ with tab_add:
 
 with tab_map:
     st.subheader("Community Map")
+
     entries = load_entries()
+    st.caption(f"Rows loaded: **{len(entries)}**")  # tiny sanity check
+
     if entries.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        m = folium.Map(location=[20, 0], zoom_start=2, tiles="CartoDB positron")
-        cluster = MarkerCluster().add_to(m)
-        for _, r in entries.iterrows():
-            popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-            folium.Marker([r["lat"], r["lon"]], popup=popup).add_to(cluster)
-        # Unique key so Streamlit doesn’t confuse it with the preview map
-        st_folium(m, height=700, width=1200, key="community_map")
+        # guard against any bad coords
+        entries = entries.dropna(subset=["lat","lon"])
+        if "lat" in entries and "lon" in entries:
+            entries = entries[(entries["lat"].between(-90,90)) & (entries["lon"].between(-180,180))]
+
+        if entries.empty:
+            st.info("No valid coordinates to show yet.")
+        else:
+            m = folium.Map(location=[20, 0], zoom_start=2, tiles="CartoDB positron")
+            cluster = MarkerCluster().add_to(m)
+            for _, r in entries.iterrows():
+                try:
+                    lat = float(r["lat"]); lon = float(r["lon"])
+                    if not (math.isnan(lat) or math.isnan(lon)):
+                        popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                        folium.Marker([lat, lon], popup=popup).add_to(cluster)
+                except Exception:
+                    continue
+            st_folium(m, height=700, width=1200, key="community_map")
