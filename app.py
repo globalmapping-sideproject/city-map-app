@@ -200,38 +200,31 @@ with tab_map:
     st.subheader("Community Map")
 
     entries = load_entries()
-    st.caption(f"Rows loaded: **{len(entries)}**")
 
     if entries.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # Clean & preview a few rows for sanity
+        # Clean entries
         entries = entries.dropna(subset=["lat", "lon"])
         entries = entries[(entries["lat"].between(-90, 90)) & (entries["lon"].between(-180, 180))]
-        st.caption("First rows:")
-        st.dataframe(entries[["username","city","country","lat","lon"]].head(3), use_container_width=True)
 
         if entries.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # Build map
-            m = folium.Map(tiles="OpenStreetMap")  # very reliable tiles
+            # Create map and add all markers
+            m = folium.Map(tiles="CartoDB positron")
             cluster = MarkerCluster().add_to(m)
 
             lats_lons = []
             for _, r in entries.iterrows():
-                lat = float(r["lat"]); lon = float(r["lon"])
+                lat, lon = float(r["lat"]), float(r["lon"])
                 lats_lons.append((lat, lon))
                 popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
                 folium.Marker([lat, lon], popup=popup).add_to(cluster)
 
-            # Fit map to markers
+            # Fit map to all pins
             if lats_lons:
                 m.fit_bounds(lats_lons, padding=(20, 20))
 
-            # Render with a safe key; fallback to raw HTML if needed
-            try:
-                st_folium(m, height=700, use_container_width=True, key="community_map")
-            except Exception:
-                from streamlit.components.v1 import html
-                html(m.get_root().render(), height=700)
+            # Display map
+            st_folium(m, height=700, use_container_width=True, key="community_map")
