@@ -199,32 +199,47 @@ with tab_add:
 with tab_map:
     st.subheader("Community Map")
 
-    entries = load_entries()
+    df = load_entries()
 
-    if entries.empty:
+    if df.empty:
         st.info("No entries yet. Add one in the **Add City** tab.")
     else:
-        # Clean entries
-        entries = entries.dropna(subset=["lat", "lon"])
-        entries = entries[(entries["lat"].between(-90, 90)) & (entries["lon"].between(-180, 180))]
+        # --- Clean hard: numeric, drop NaNs / out-of-range
+        df = df.copy()
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+        df = df.dropna(subset=["lat", "lon"])
+        df = df[(df["lat"].between(-90, 90)) & (df["lon"].between(-180, 180))]
 
-        if entries.empty:
+        if df.empty:
             st.info("No valid coordinates to show yet.")
         else:
-            # Create map and add all markers
+            # --- Build map
             m = folium.Map(tiles="CartoDB positron")
             cluster = MarkerCluster().add_to(m)
 
-            lats_lons = []
-            for _, r in entries.iterrows():
-                lat, lon = float(r["lat"]), float(r["lon"])
-                lats_lons.append((lat, lon))
-                popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
-                folium.Marker([lat, lon], popup=popup).add_to(cluster)
+            bounds = []
+            for _, r in df.iterrows():
+                try:
+                    lat = float(r["lat"])
+                    lon = float(r["lon"])
+                    popup = f"<b>{r['username']}</b><br>{r['city']}<br>{r['country']}"
+                    folium.Marker([lat, lon], popup=popup).add_to(cluster)
+                    bounds.append((lat, lon))
+                except Exception:
+                    continue
 
-            # Fit map to all pins
-            if lats_lons:
-                m.fit_bounds(lats_lons, padding=(20, 20))
+            if bounds:
+                m.fit_bounds(bounds, padding=(20, 20))
+            else:
+                # Fallback center
+                m.location = [20, 0]
+                m.zoom_start = 2
 
-            # Display map
-            st_folium(m, height=700, use_container_width=True, key="community_map")
+            # --- Render: force a fresh widget key + robust fallback
+            key_seed = f"{len(df)}-{round(df['lat'].sum(), 6)}-{round(df['lon'].sum(), 6)}"
+            try:
+                st_folium(m, height=700, use_container_width=True, key=f"community_map_{key_seed}")
+            except Exception:
+                from streamlit.components.v1 import html
+                html(m.get_root().render(), height=700)
